@@ -1,0 +1,11 @@
+# data (external or generated)
+data/**
+
+# keep helper files
+!data/README.md
+!scripts/**
+
+# env / caches
+.venv/
+.env
+__pycache__/
