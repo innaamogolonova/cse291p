@@ -43,4 +43,7 @@ sqlite3 "${DB_PATH}" ".tables" || { echo "sqlite3 check failed"; exit 1; }
 ls "${META_DIR}/meta" | head || true
 ls "${META_DIR}/patches" | head || true
 
+echo "==> Step 4: Filter to memory-related bugs"
+scripts/filter_memory_cases.py
+
 echo "All set."
