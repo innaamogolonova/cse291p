@@ -1,71 +1,64 @@
 #!/usr/bin/env python3
-import json, re, shutil, os, sys
-from pathlib import Path
+import json
+import csv
+import os
+import re
 
-ROOT = Path(__file__).resolve().parents[1]
-ARVO = ROOT / "data" / "arvo" / "ARVO-Meta"
-META = ARVO / "meta"
-PATCHES = ARVO / "patches"
-OUT = ROOT / "data" / "arvo_filtered"
-OUT_META = OUT / "meta"
-OUT_PATCHES = OUT / "patches"
-OUT_IDS = OUT / "memory_ids.txt"
+META_DIR = "data/arvo/ARVO-Meta/meta"
+OUTPUT_CSV = "data/arvo/memory_cases_asan.csv"
 
-# Memory-related patterns (lower-cased compare)
-MEM_PATTERNS = [
-    r"buffer[- ]?overflow",
+# Define memory-safety crash types (case-insensitive substring match)
+MEMORY_PATTERNS = [
     r"use[- ]?after[- ]?free",
+    r"use[- ]?after[- ]?return",
     r"double[- ]?free",
-    r"invalid[- ]?free",
+    r"heap[- ]?buffer[- ]?overflow",
+    r"stack[- ]?buffer[- ]?overflow",
+    r"global[- ]?buffer[- ]?overflow",
+    r"buffer[- ]?overflow",
     r"out[- ]?of[- ]?bounds",
-    r"heap[- ]",
-    r"stack[- ]",
+    r"oob[- ]?(read|write)?",
+    r"invalid[- ]?(read|write)",
+    r"heap[- ]?use[- ]?after[- ]?free",
+    r"stack[- ]?use[- ]?after[- ]?return",
+    r"use[- ]?of[- ]?uninitialized",
+    r"null[- ]?dereference",
 ]
-MEM_RE = re.compile("|".join(MEM_PATTERNS))
+MEMORY_REGEX = re.compile("|".join(MEMORY_PATTERNS), re.IGNORECASE)
 
-def is_memory_bug(meta_obj):
-    # Be permissive: sanitizer == asan OR crash_type matches patterns
-    sanitizer = str(meta_obj.get("sanitizer", "")).lower()
-    ctype = str(meta_obj.get("crash_type", "")).lower()
-    if "asan" in sanitizer:
-        return True
-    if MEM_RE.search(ctype or ""):
-        return True
-    return False
+rows = []
+for fname in os.listdir(META_DIR):
+    if not fname.endswith(".json"):
+        continue
+    path = os.path.join(META_DIR, fname)
+    try:
+        with open(path, "r") as f:
+            data = json.load(f)
+    except json.JSONDecodeError:
+        print(f"Skipping invalid JSON: {fname}")
+        continue
 
-def main():
-    if not META.exists():
-        print(f"Missing {META}. Run your prepare script first.", file=sys.stderr)
-        sys.exit(1)
+    local_id = data.get("localId")
+    crash_type = data.get("crash_type") or ""
+    sanitizer = (data.get("sanitizer") or "").lower()
 
-    OUT_META.mkdir(parents=True, exist_ok=True)
-    OUT_PATCHES.mkdir(parents=True, exist_ok=True)
+    # Filter: sanitizer must be ASan, and crash_type must look like a memory bug
+    if sanitizer == "asan" and MEMORY_REGEX.search(crash_type):
+        rows.append({
+            "localId": local_id,
+            "crash_type": crash_type,
+            "sanitizer": sanitizer,
+        })
 
-    kept = []
-    for jpath in META.glob("*.json"):
-        try:
-            meta = json.loads(jpath.read_text(encoding="utf-8"))
-        except Exception as e:
-            print(f"Skip {jpath.name}: {e}", file=sys.stderr)
-            continue
+# Sort results by ID (numerically)
+rows.sort(key=lambda r: (r["localId"] is None, r["localId"]))
 
-        if is_memory_bug(meta):
-            case_id = str(meta.get("localId") or jpath.stem)
-            kept.append(case_id)
+# Write CSV
+os.makedirs(os.path.dirname(OUTPUT_CSV), exist_ok=True)
+with open(OUTPUT_CSV, "w", newline="") as csvfile:
+    fieldnames = ["localId", "crash_type", "sanitizer"]
+    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+    writer.writeheader()
+    writer.writerows(rows)
 
-            # copy meta/<id>.json
-            shutil.copy2(jpath, OUT_META / jpath.name)
-
-            # copy patches/<id>.diff if present
-            dpath = PATCHES / f"{case_id}.diff"
-            if dpath.exists():
-                shutil.copy2(dpath, OUT_PATCHES / dpath.name)
-
-    OUT_IDS.write_text("\n".join(sorted(kept)) + "\n", encoding="utf-8")
-    print(f"Kept {len(kept)} memory cases.")
-    print(f"- IDs written to: {OUT_IDS}")
-    print(f"- Meta copied to: {OUT_META}")
-    print(f"- Patches copied to: {OUT_PATCHES}")
-
-if __name__ == "__main__":
-    main()
+print(f"✅ Wrote {len(rows)} ASan memory bugs to {OUTPUT_CSV}")
