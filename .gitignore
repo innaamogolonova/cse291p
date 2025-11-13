@@ -9,3 +9,7 @@ data/**
 .venv/
 .env
 __pycache__/
+
+# claude files
+.claude/**
+CLAUDE.md
